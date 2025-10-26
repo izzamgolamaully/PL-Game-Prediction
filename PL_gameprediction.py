@@ -89,7 +89,7 @@ def train_random_forest(df):
     y_pred = model.predict(X_test)
 
     acc = accuracy_score(y_test, y_pred)
-    print(f"\nClassification Report: {acc:.3f}")
+    print(f"\nClassification Report: {acc:.3f}") 
     print(classification_report(y_test, y_pred))
 
     plt.figure(figsize=(10, 6))
