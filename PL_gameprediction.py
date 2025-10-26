@@ -1,49 +1,104 @@
 # Premier League Match Outcome Predictor & Season Simulator using Random Forest
 #import libraries
+from xml.parsers.expat import model
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import soccerdata as sd
-from datetime import timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
-
-
-#loading football-data.co.uk csv files
-FOOTBALL_DATA_PATH = './football_data/' # folder with downloaded E0_*.csv filesimport glob,os
+from sklearn.metrics import classification_report, confusion_matrix ,accuracy_score
 import glob,os
 
-def load_football_data(path):
-    files = glob.glob(os.path.join(path, 'E0_*.csv'))
+from sympy import rf
+
+
+
+#loading multiple seasons of premier league csv files
+def load_football_data(data_folder = "./football_data/"):
+    all_files = glob.glob(os.path.join(data_folder, "*.csv"))
+    if not all_files:
+        raise ValueError("No CSV files found in {data_folder}. Please download season data from football-data.co.uk")
+   
     dfs = []
-    for f in files:
-        df = pd.read_csv(f)
-        df.rename(columns = {'Date':'date','HomeTeam':'home_team','AwayTeam':'away_team','FTHG':'home_goals', 'FTAG':'away_goals', 'FTR':'result'})
-
-        df['date'] = pd.to_datetime(df['date'], dayfirst=True, errors='coerce')
-        dfs.append(df)
+    for file in all_files:
+        try:
+            df = pd.read_csv(file)
+            df['SeasonFile'] = file.split('/')[-1]
+            dfs.append(df)
+        except Exception as e:
+            print(f"Error reading {file}: {e}")
     
-    full = pd.concat(dfs, ignore_index=True)
-    full = full.sort_values('date').reset_index(drop=True)
-    return full
+    combined_df = pd.concat(dfs, ignore_index=True)
+    print(f"Loaded {len(all_files)} seasons with {len(combined_df)} total matches.")
+    return combined_df
 
-fd = load_football_data(FOOTBALL_DATA_PATH)
-fd = fd[['date', 'home_team', 'away_team', 'home_goals', 'away_goals', 'result']]
-print('Football data loaded with shape:', fd.shape)
+#Cleaning and feature engineering
+def preprocess_data(df):
+    #standardizing column names
+    rename_map = {
+        'HomeTeam': 'HomeTeam',
+        'AwayTeam': 'AwayTeam', 
+        'FTHG': 'FTHG',
+        'FTAG': 'FTAG',
+        'FTR': 'FTR',
+        'HS': 'HS',
+        'AS': 'AS',
+        'HST': 'HST',
+        'AST': 'AST',
+        'HC': 'HC',
+        'AC': 'AC',
+    }
 
-#Fetching fbref stats
-LEAGUE = 'ENG-PREMIER-LEAGUE'
-fb = sd.FBref(LEAGUE,None)
-fb_schedule = fb.read_schedule()
-fb_stats = fb.read_match_stats()
-fb_df = fb_schedule.merge(fb_stats, on=['home_team','away_team','date'], how='left')
-print('FBref shape:', fb_df.shape)
+    df = df.rename(columns=rename_map)
 
-#Merging datasets
-df = pd.merge(fd, fb_df, on=['date','home_team','away_team'], how='left')
-df = df[~df['home_goals'].isna()].reset_index(drop=True)
-print('Merged dataset shape:', df.shape)
+    #keep only key columns
+    columns_needed = ['Date' ,'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC']
+    df = df[[ c for c in columns_needed if c in df.columns]]
 
-#Pre-match Elo rating
+    #encoding match results 1=Home Win, 0=Draw, -1=Away Win
+    df['Result'] = df['FTR'].map({'H': 1, 'D': 0, 'A': -1})
+
+    #handling missing values or malformed dates
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df = df.dropna(subset=['Date'])
+    df.sort_values('Date', inplace=True)
+
+    #Home advantage
+    df['HomeAdvantage'] = 1
+
+    #rolling form based on last 5 matches
+    df['HomeTeamForm'] = df.groupby('HomeTeam')['Result'].apply(lambda x: x.shift().rolling(5, min_periods=1).mean())
+    df['AwayTeamForm'] = df.groupby('AwayTeam')['Result'].apply(lambda x: (-x).shift().rolling(5, min_periods=1).mean())
+
+    df.dropna(inplace=True)
+    return df
+
+#model training
+def train_random_forest(df):
+    features = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HomeAdvantage', 'HomeTeamForm', 'AwayTeamForm']
+    df= df.dropna(subset=features)
+    X = df[features]
+    y = df['Result']
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+    model = RandomForestClassifier(n_estimators=300, random_state=42)
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+
+    acc = accuracy_score(y_test, y_pred)
+    print(f"\nClassification Report: {acc:.3f}")
+    print(classification_report(y_test, y_pred))
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=model.feature_importances_, y=features)
+    plt.title('Feature Importance')
+    plt.tight_layout()
+    plt.show()
+    #print("Confusion Matrix:")
+    #print(confusion_matrix(y_test, y_pred))
+    #print("Accuracy Score:", accuracy_score(y_test, y_pred))
+
+    return model
