@@ -60,16 +60,17 @@ def preprocess_data(df):
     df['Result'] = df['FTR'].map({'H': 1, 'D': 0, 'A': -1})
 
     #handling missing values or malformed dates
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
     df = df.dropna(subset=['Date'])
     df.sort_values('Date', inplace=True)
+    df.reset_index(drop=True, inplace=True)
 
     #Home advantage
     df['HomeAdvantage'] = 1
 
     #rolling form based on last 5 matches
-    df['HomeTeamForm'] = df.groupby('HomeTeam')['Result'].apply(lambda x: x.shift().rolling(5, min_periods=1).mean())
-    df['AwayTeamForm'] = df.groupby('AwayTeam')['Result'].apply(lambda x: (-x).shift().rolling(5, min_periods=1).mean())
+    df['HomeTeamForm'] = df.groupby('HomeTeam')['Result'].transform(lambda x: x.shift().rolling(5, min_periods=1).mean())
+    df['AwayTeamForm'] = df.groupby('AwayTeam')['Result'].transform(lambda x: (-x).shift().rolling(5, min_periods=1).mean())
 
     df.dropna(inplace=True)
     return df
@@ -102,3 +103,37 @@ def train_random_forest(df):
     #print("Accuracy Score:", accuracy_score(y_test, y_pred))
 
     return model
+
+#season simulation
+def simulate_season(df, model):
+    features = ['HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HomeAdvantage', 'HomeTeamForm', 'AwayTeamForm']
+    df['PredictedResult'] = model.predict(df[features])
+
+    
+    team_points = {}
+    for team in pd.concat([df['HomeTeam'], df['AwayTeam']]).unique():
+        team_points[team] = 0
+
+    for _, row in df.iterrows():
+        if row['PredictedResult'] == 1:
+            team_points[row['HomeTeam']] += 3
+        elif row['PredictedResult'] == 0:
+            team_points[row['HomeTeam']] += 1
+            team_points[row['AwayTeam']] += 1
+        else:
+            team_points[row['AwayTeam']] += 3
+
+    league_table = pd.DataFrame(list(team_points.items()), columns=['Team', 'Points'])
+    league_table = league_table.sort_values(by='Points', ascending=False).reset_index(drop=True)
+    print("\nSimulated Season Standings:")
+    print(league_table)
+    return league_table
+
+
+#main execution
+if __name__ == "__main__":
+    data_folder = "./football_data/"  #ensure this folder contains premier league season csv files
+    df = load_football_data(data_folder)
+    df = preprocess_data(df)
+    model = train_random_forest(df)
+    simulate_season(df, model)
